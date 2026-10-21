@@ -98,7 +98,8 @@ def write_subconfigs(config: RLConfig, output_dir: Path) -> None:
 
 
 def rl_local(config: RLConfig):
-    from prime_rl.utils.device import VISIBLE_DEVICES_ENV
+    if not config.dry_run:
+        from prime_rl.utils.device import VISIBLE_DEVICES_ENV
 
     assert config.deployment.type == "single_node"
 
