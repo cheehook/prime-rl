@@ -270,6 +270,7 @@ print(f"torch {torch.__version__}, vllm {version('vllm')}, transformers {version
 PY
 
 ENV VLLM_TARGET_DEVICE=xpu
+ENV UV_NO_SYNC=1
 ENV VLLM_WORKER_MULTIPROC_METHOD=spawn
 # HuggingFace Hub timeouts (defaults are 10s which causes issues on slow networks)
 ENV HF_HUB_ETAG_TIMEOUT=500
