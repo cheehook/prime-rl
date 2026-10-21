@@ -302,7 +302,8 @@ def sft_slurm(config: SFTConfig):
 
 def sft_local(config: SFTConfig):
     """Run SFT training locally with process monitoring and cleanup."""
-    from prime_rl.utils.device import VISIBLE_DEVICES_ENV
+    if not config.dry_run:
+        from prime_rl.utils.device import VISIBLE_DEVICES_ENV
 
     assert config.deployment.type == "single_node"
 
