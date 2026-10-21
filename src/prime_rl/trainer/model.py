@@ -64,6 +64,7 @@ from prime_rl.trainer.moe_runtime import configure_moe_runtime
 from prime_rl.trainer.parallel_dims import ParallelDims
 from prime_rl.trainer.utils import get_dcp_group
 from prime_rl.trainer.world import get_world, wait_for_master
+from prime_rl.utils.device import DEVICE_TYPE
 from prime_rl.utils.logger import get_logger
 from prime_rl.utils.utils import format_time
 from prime_rl.utils.vlm import get_language_model, get_vision_encoder, is_vlm_architecture
@@ -690,7 +691,7 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
 
 
 def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDims):
-    device = "cuda"
+    device = DEVICE_TYPE
     model.to_empty(device=device)
     torch.distributed.barrier()
 
@@ -777,11 +778,11 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: Paral
         if parallel_dims.dp_replicate_enabled:
             # Synchronize LoRA initialization across dp_replicate ranks by broadcasting a seed
             dp_replicate_mesh = parallel_dims.world_mesh["dp_replicate"]
-            seed_tensor = torch.empty(1, dtype=torch.long, device="cuda")
+            seed_tensor = torch.empty(1, dtype=torch.long, device=DEVICE_TYPE)
             if dp_replicate_mesh.get_local_rank() == 0:
                 seed_tensor.random_()
             torch.distributed.broadcast(seed_tensor, src=0, group=dp_replicate_mesh.get_group())
-            generator = torch.Generator(device="cuda").manual_seed(seed_tensor.item())
+            generator = torch.Generator(device=DEVICE_TYPE).manual_seed(seed_tensor.item())
         for module in lora_modules:
             module._init_lora_parameters(generator)
     logger.debug(f"Loaded weights using HF DCP in {format_time(time.perf_counter() - load_dcp_start_time)}")
@@ -913,6 +914,11 @@ def resolve_auto_attn(config: ModelConfig) -> None:
     """
     if config.attn != "auto":
         return
+    if DEVICE_TYPE == "xpu":
+        # FA3 and FA4 are Hopper/Blackwell kernels; Intel XPU runs FlashAttention-2.
+        get_logger().info("Auto-resolved attn='auto' to 'flash_attention_2' (Intel XPU)")
+        config.attn = "flash_attention_2"
+        return
     major, minor = torch.cuda.get_device_capability()
     if major in (10, 11):
         resolved = "flash_attention_4"
@@ -1000,7 +1006,7 @@ def setup_model(
         logger.warning(
             "Skipping loading weights. Initializing an empty model on device, loading from checkpoint later."
         )
-        device = "cuda"
+        device = DEVICE_TYPE
         model.to_empty(device=device)
         torch.distributed.barrier()
         model.init_buffers_post_meta()

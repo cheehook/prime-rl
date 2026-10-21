@@ -1,0 +1,21 @@
+# Intel XPU (e.g. Arc Pro B70) overlay for the reverse-text RL example:
+#   rl @ examples/basic/reverse-text/rl.toml @ examples/basic/reverse-text/xpu.toml
+# Run it in the prime-rl:xpu image (Dockerfile.xpu) started with
+#   --device /dev/dri -v /dev/dri/by-path:/dev/dri/by-path --ipc=host
+# The by-path mount lets oneCCL exchange GPU memory handles inside a container.
+
+# NCCL weight broadcast is CUDA-only; move weights through the filesystem.
+[weight_broadcast]
+type = "filesystem"
+
+[trainer.model]
+attn = "flash_attention_2"  # what attn = "auto" resolves to on XPU
+compile = "None"
+offload = "none"  # the optimizer-offload path still uses CUDA streams and events
+
+[inference.vllm]
+max_model_len = 2048
+gpu_memory_utilization = 0.3
+# A fixed KV cache size skips vLLM's startup memory profiling, which fails when the trainer
+# shares the GPU and frees memory while vLLM measures.
+kv_cache_memory_bytes = 4294967296

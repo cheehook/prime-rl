@@ -32,6 +32,7 @@ from prime_rl.utils.process import (
     DEFAULT_INFERENCE_ENV_VARS,
     DEFAULT_TRAINER_ENV_VARS,
     ProcessGroup,
+    local_trainer_env_vars,
     partition_gpus,
     set_proc_title,
     torchrun_cmd,
@@ -97,6 +98,8 @@ def write_subconfigs(config: RLConfig, output_dir: Path) -> None:
 
 
 def rl_local(config: RLConfig):
+    from prime_rl.utils.device import VISIBLE_DEVICES_ENV
+
     assert config.deployment.type == "single_node"
 
     logger = setup_logger(
@@ -164,7 +167,7 @@ def rl_local(config: RLConfig):
                     **DEFAULT_INFERENCE_ENV_VARS,
                     **config.env_vars,
                     **config.inference.env_vars,
-                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, infer_gpu_ids)),
+                    VISIBLE_DEVICES_ENV: ",".join(map(str, infer_gpu_ids)),
                 },
                 log_path=log_dir / "inference.log",
             )
@@ -234,7 +237,7 @@ def rl_local(config: RLConfig):
             env={
                 **os.environ,
                 **DEFAULT_COMMON_ENV_VARS,
-                **DEFAULT_TRAINER_ENV_VARS,
+                **local_trainer_env_vars(),
                 "LOGURU_FORCE_COLORS": "1",
                 "WANDB_PROGRAM": "uv run rl",
                 "WANDB_ARGS": json.dumps(start_command),
@@ -242,7 +245,7 @@ def rl_local(config: RLConfig):
                 **config.trainer.env_vars,
                 **wandb_shared_env,
                 "WANDB_SHARED_LABEL": "trainer",
-                "CUDA_VISIBLE_DEVICES": ",".join(map(str, trainer_gpu_ids)),
+                VISIBLE_DEVICES_ENV: ",".join(map(str, trainer_gpu_ids)),
             },
             log_path=log_dir / "trainer.log",
         )

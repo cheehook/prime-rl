@@ -20,6 +20,7 @@ from prime_rl.trainer.models.layers.lora.multi_moe import (
 )
 from prime_rl.trainer.models.layers.moe import GroupedExperts
 from prime_rl.trainer.world import get_world
+from prime_rl.utils.device import DEVICE_TYPE
 from prime_rl.utils.logger import get_logger
 
 
@@ -221,7 +222,7 @@ def apply_lora_to_model(model: nn.Module, config: LoRAConfig) -> None:
     logger = get_logger()
     from prime_rl.trainer.models import PreTrainedModelPrimeRL
 
-    lora_state = setup_lora_state(config, torch.device("cuda", get_world().local_rank))
+    lora_state = setup_lora_state(config, torch.device(DEVICE_TYPE, get_world().local_rank))
     if isinstance(model, PreTrainedModelPrimeRL):
         lora_state.register_adapter_state_dict_converter(type(model).convert_adapter_to_hf)
     uses_gpt_oss_moe_adapter = (

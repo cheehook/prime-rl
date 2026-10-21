@@ -1,12 +1,12 @@
 import time
 
-import torch
 from torch import nn
 from transformers import PretrainedConfig
 
 from prime_rl.trainer.lora import has_lora_layers
 from prime_rl.trainer.models.layers.lora import MultiLoRAModule
 from prime_rl.trainer.world import get_world
+from prime_rl.utils.device import device_module
 from prime_rl.utils.logger import get_logger
 
 
@@ -33,8 +33,8 @@ class PerfCounter:
         self._world = get_world()
         self._logger = get_logger()
 
-        if torch.cuda.is_available():
-            self.gpu_peak_flops = self._get_peak_flops(torch.cuda.get_device_name(torch.device("cuda")))
+        if device_module.is_available():
+            self.gpu_peak_flops = self._get_peak_flops(device_module.get_device_name())
         else:
             self.gpu_peak_flops = 0
         self.num_flop_per_token = self._get_num_flop_per_token(model.config, seq_len=seq_len)

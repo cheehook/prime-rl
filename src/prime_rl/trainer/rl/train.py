@@ -11,6 +11,7 @@ from datetime import timedelta
 
 from prime_rl.transports.weights import prune_broadcasts_beyond, setup_weight_sender
 from prime_rl.utils.act_offloading import maybe_activation_offloading
+from prime_rl.utils.device import DEVICE_TYPE, device_module
 import torch
 import torch.distributed as dist
 from torch.profiler import profile, ProfilerActivity, record_function
@@ -247,13 +248,15 @@ def train(config: TrainerConfig):
     maybe_record_function = nullcontext
     if config.trace_path:
         logger.info(f"Tracing to {config.trace_path}")
-        prof = profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], record_shapes=True).__enter__()
+        prof = profile(
+            activities=[ProfilerActivity.CPU, getattr(ProfilerActivity, DEVICE_TYPE.upper())], record_shapes=True
+        ).__enter__()
         maybe_record_function = record_function
     start_step = progress.step
     max_peak_memory = 0.0
     while True:
         # Reset peak memory stats
-        torch.cuda.reset_peak_memory_stats()
+        device_module.reset_peak_memory_stats()
         if gc_handler is not None:
             gc_handler.run(progress.step)
         is_last_step = config.max_steps is not None and progress.step >= config.max_steps
@@ -319,7 +322,7 @@ def train(config: TrainerConfig):
             if micro_batch["ref_kl_weights"] is not None:
                 local_ref_kl_scale += int((micro_batch["ref_kl_weights"] != 0).sum())
         global_scales = torch.tensor(
-            [local_rl_scale, local_ce_scale, local_ref_kl_scale], dtype=torch.float64, device="cuda"
+            [local_rl_scale, local_ce_scale, local_ref_kl_scale], dtype=torch.float64, device=DEVICE_TYPE
         )
         dp_cp_group = parallel_dims.get_mesh("dp_cp").get_group()
         dist.all_reduce(global_scales, op=dist.ReduceOp.SUM, group=dp_cp_group)
@@ -341,19 +344,21 @@ def train(config: TrainerConfig):
         step_local_num_tokens = 0
         for micro_step, micro_batch in enumerate(micro_batch_workers(prepare, micro_batches)):
             step_local_num_tokens += micro_batch["input_ids"].shape[1]
-            input_ids = micro_batch["input_ids"].to("cuda")
-            position_ids = micro_batch["position_ids"].to("cuda")
-            advantages = micro_batch["advantages"].to("cuda")
-            loss_mask = micro_batch["loss_mask"].to("cuda")
-            inference_logprobs = micro_batch["inference_logprobs"].to("cuda")
-            ref_logprobs = micro_batch["ref_logprobs"].to("cuda") if micro_batch["ref_logprobs"] is not None else None
-            rl_weights = micro_batch["rl_weights"].to("cuda") if micro_batch["rl_weights"] is not None else None
-            ce_weights = micro_batch["ce_weights"].to("cuda") if micro_batch["ce_weights"] is not None else None
+            input_ids = micro_batch["input_ids"].to(DEVICE_TYPE)
+            position_ids = micro_batch["position_ids"].to(DEVICE_TYPE)
+            advantages = micro_batch["advantages"].to(DEVICE_TYPE)
+            loss_mask = micro_batch["loss_mask"].to(DEVICE_TYPE)
+            inference_logprobs = micro_batch["inference_logprobs"].to(DEVICE_TYPE)
+            ref_logprobs = (
+                micro_batch["ref_logprobs"].to(DEVICE_TYPE) if micro_batch["ref_logprobs"] is not None else None
+            )
+            rl_weights = micro_batch["rl_weights"].to(DEVICE_TYPE) if micro_batch["rl_weights"] is not None else None
+            ce_weights = micro_batch["ce_weights"].to(DEVICE_TYPE) if micro_batch["ce_weights"] is not None else None
             ref_kl_weights = (
-                micro_batch["ref_kl_weights"].to("cuda") if micro_batch["ref_kl_weights"] is not None else None
+                micro_batch["ref_kl_weights"].to(DEVICE_TYPE) if micro_batch["ref_kl_weights"] is not None else None
             )
             routed_experts = (
-                micro_batch["routed_experts"].to("cuda") if micro_batch["routed_experts"] is not None else None
+                micro_batch["routed_experts"].to(DEVICE_TYPE) if micro_batch["routed_experts"] is not None else None
             )
 
             if routed_experts is None and config.enable_router_replay:
@@ -366,20 +371,20 @@ def train(config: TrainerConfig):
                 routed_experts = None
 
             sampling_mask = (
-                micro_batch["sampling_mask"].to("cuda") if micro_batch["sampling_mask"] is not None else None
+                micro_batch["sampling_mask"].to(DEVICE_TYPE) if micro_batch["sampling_mask"] is not None else None
             )
 
             mm_kwargs = micro_batch.pop("mm_kwargs")
             if mm_kwargs is not None:
-                mm_kwargs = {key: value.to("cuda") for key, value in mm_kwargs.items()}
+                mm_kwargs = {key: value.to(DEVICE_TYPE) for key, value in mm_kwargs.items()}
             mm_forward_policy = micro_batch.pop("mm_forward_policy")
             mm_token_type_ids = (
-                micro_batch["mm_token_type_ids"].to("cuda")
+                micro_batch["mm_token_type_ids"].to(DEVICE_TYPE)
                 if micro_batch.get("mm_token_type_ids") is not None
                 else None
             )
 
-            seq_lens = micro_batch["seq_lens"].to("cuda")
+            seq_lens = micro_batch["seq_lens"].to(DEVICE_TYPE)
 
             labels = shift_tensor_left(input_ids)
             if sampling_mask is not None:
@@ -413,7 +418,7 @@ def train(config: TrainerConfig):
                     sampling_mask = shard_for_cp(sampling_mask, cp_rank=cp_rank, cp_world_size=cp_size)
 
             if config.model.lora:
-                lora_num_tokens = micro_batch["lora_num_tokens"].to("cuda")
+                lora_num_tokens = micro_batch["lora_num_tokens"].to(DEVICE_TYPE)
                 if cp_enabled:
                     chunk_size = labels.shape[1]
                     # Convert to cumsum, adjust for CP chunk, convert back to num_tokens
@@ -424,7 +429,7 @@ def train(config: TrainerConfig):
                     )
                 set_lora_num_tokens(lora_num_tokens)
 
-            temperatures = micro_batch["temperatures"].to("cuda")
+            temperatures = micro_batch["temperatures"].to(DEVICE_TYPE)
 
             # Shard temperatures for context parallelism if enabled
             if cp_enabled:
@@ -600,8 +605,8 @@ def train(config: TrainerConfig):
             # so a still-running kernel holding a cached block (e.g. the
             # optimizer step's tail) faults with an illegal memory access
             # once its block is freed under it.
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
+            device_module.synchronize()
+            device_module.empty_cache()
             weight_sender.broadcast(model, step=progress.step)
             broadcast_weights_time = time.perf_counter() - broadcast_weights_start_time
 
@@ -631,7 +636,7 @@ def train(config: TrainerConfig):
             tensor_stats.update(get_expert_load_stats(step_tokens_per_expert, dp_cp_group))
 
         # The dp mesh excludes cp, whose ranks hold the same rows.
-        global_num_tokens = torch.tensor(step_local_num_tokens, dtype=torch.int64, device="cuda")
+        global_num_tokens = torch.tensor(step_local_num_tokens, dtype=torch.int64, device=DEVICE_TYPE)
         dist.all_reduce(global_num_tokens, op=dist.ReduceOp.SUM, group=parallel_dims.get_mesh("dp").get_group())
         num_tokens = global_num_tokens.item()
         progress.total_tokens += num_tokens
@@ -639,7 +644,7 @@ def train(config: TrainerConfig):
         perf_counter = get_perf_counter(model, seq_len)
         throughput = perf_counter.get_step_tokens_per_second(num_tokens, forward_backward_time)
         mfu = perf_counter.get_step_mfu(num_tokens, forward_backward_time)
-        peak_memory = torch.cuda.max_memory_reserved() / 1024**3  # GiB
+        peak_memory = device_module.max_memory_reserved() / 1024**3  # GiB
         max_peak_memory = max(max_peak_memory, peak_memory)
 
         # Log step metrics

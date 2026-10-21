@@ -77,8 +77,11 @@ _CUSTOM_CAUSAL_LM_MODELS: tuple[
     (Qwen3_8FlashNextConfig, Qwen3_8FlashNextForCausalLM),
     (GptOssConfig, GptOssForCausalLM),
 )
+# This mapping is private to prime-rl and deliberately maps native transformers configs (LlamaConfig,
+# Qwen3Config) to PrimeRL models. Newer transformers (5.17) make register() skip config classes
+# defined in transformers, so the entries are stored directly, as register() itself did before.
 for config_cls, model_cls in _CUSTOM_CAUSAL_LM_MODELS:
-    _CUSTOM_CAUSAL_LM_MAPPING.register(config_cls, model_cls, exist_ok=True)
+    _CUSTOM_CAUSAL_LM_MAPPING._extra_content[config_cls] = model_cls
 
 _CUSTOM_CAUSAL_LM_BY_MODEL_TYPE = {
     config_cls.model_type: model_cls for config_cls, model_cls in _CUSTOM_CAUSAL_LM_MODELS

@@ -35,6 +35,18 @@ DEFAULT_TRAINER_ENV_VARS: dict[str, str] = {
     "TORCH_FR_DUMP_TEMP_FILE": f"/tmp/nccl_trace_{os.getuid()}_rank_",
 }
 
+
+def local_trainer_env_vars() -> dict[str, str]:
+    """``DEFAULT_TRAINER_ENV_VARS`` for a trainer launched on this machine. Intel XPU's caching
+    allocator also reads ``PYTORCH_CUDA_ALLOC_CONF``, and oneCCL collectives segfault on
+    expandable-segment memory, so an XPU trainer keeps the default allocator."""
+    from prime_rl.utils.device import DEVICE_TYPE
+
+    if DEVICE_TYPE == "xpu":
+        return {key: value for key, value in DEFAULT_TRAINER_ENV_VARS.items() if key != "PYTORCH_CUDA_ALLOC_CONF"}
+    return dict(DEFAULT_TRAINER_ENV_VARS)
+
+
 DEFAULT_INFERENCE_ENV_VARS: dict[str, str] = {
     "VLLM_WORKER_MULTIPROC_METHOD": "spawn",
     "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
@@ -48,9 +60,15 @@ DEFAULT_INFERENCE_ENV_VARS: dict[str, str] = {
 
 
 def get_physical_gpu_ids() -> list[int]:
-    """Return physical GPU IDs visible to the launcher."""
-    raw_visible = os.environ.get("CUDA_VISIBLE_DEVICES")
+    """Return physical GPU IDs visible to the launcher (``ZE_AFFINITY_MASK`` on Intel XPU)."""
+    from prime_rl.utils.device import DEVICE_TYPE, VISIBLE_DEVICES_ENV
+
+    raw_visible = os.environ.get(VISIBLE_DEVICES_ENV)
     if raw_visible is None:
+        if DEVICE_TYPE == "xpu":
+            import torch
+
+            return list(range(torch.xpu.device_count()))
         import pynvml
 
         pynvml.nvmlInit()
