@@ -43,7 +43,7 @@ def local_trainer_env_vars() -> dict[str, str]:
     from prime_rl.utils.device import DEVICE_TYPE
 
     if DEVICE_TYPE == "xpu":
-        return {key: value for key, value in DEFAULT_TRAINER_ENV_VARS.items() if key != "PYTORCH_CUDA_ALLOC_CONF"}
+        return {**DEFAULT_TRAINER_ENV_VARS, "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False"}
     return dict(DEFAULT_TRAINER_ENV_VARS)
 
 
