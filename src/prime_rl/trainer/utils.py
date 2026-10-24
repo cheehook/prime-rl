@@ -18,6 +18,7 @@ from torch.distributed.tensor import DTensor
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from prime_rl.trainer.world import get_world
+from prime_rl.utils.device import DEVICE_TYPE, DIST_BACKEND, device_module
 from prime_rl.utils.logger import format_time, get_logger
 from prime_rl.utils.pathing import get_ckpt_dir
 
@@ -138,9 +139,13 @@ def bind_process_to_gpu_numa_node() -> None:
     GPU hangs off. Must run before CPU optimizer state allocation and before the
     OMP thread pool spins up.
     """
+    logger = get_logger()
+    if DEVICE_TYPE == "xpu":
+        logger.warning("GPU NUMA lookup uses NVML, which has no Intel XPU equivalent; skipping NUMA binding")
+        return
+
     import pynvml
 
-    logger = get_logger()
     device_id = torch.cuda.current_device()
     pynvml.nvmlInit()
     try:
@@ -186,13 +191,13 @@ def setup_torch_distributed(timeout: timedelta = DEFAULT_TIMEOUT, enable_gloo: b
     get_logger().info(f"Initializing torch distributed (timeout={int(timeout.total_seconds())}s)")
     t0 = time.perf_counter()
     device_id = get_world().local_rank
-    torch.cuda.set_device(device_id)
+    device_module.set_device(device_id)
     # Use Gloo backend for CPU and NCCL for GPU when CPU offloading is enabled
     # Otherwise use NCCL for better GPU performance
     backend = None  # by default nccl
     if enable_gloo:
-        get_logger().info("Using Gloo backend for CPU and NCCL backend for GPU")
-        backend = "cpu:gloo,cuda:nccl"
+        get_logger().info(f"Using Gloo backend for CPU and {DIST_BACKEND} backend for GPU")
+        backend = f"cpu:gloo,{DEVICE_TYPE}:{DIST_BACKEND}"
 
     # init_process_group applies `timeout` only to the default PG; device-mesh
     # sub-groups (dp/cp/ep) are created via new_group without a timeout and fall
@@ -201,7 +206,11 @@ def setup_torch_distributed(timeout: timedelta = DEFAULT_TIMEOUT, enable_gloo: b
     # module default so every subsequently created PG inherits it.
     dist.distributed_c10d.default_pg_timeout = timeout
 
-    dist.init_process_group(backend=backend, timeout=timeout, device_id=device_id)
+    # Binding the default group to a device makes every later new_group look up a backend for that
+    # device. Gloo handles CUDA tensors but not XPU ones, so CPU-only gloo groups (e.g. the DCP group)
+    # fail on XPU when the default group is bound; bind on CUDA only.
+    bound_device = torch.device(DEVICE_TYPE, device_id) if DEVICE_TYPE == "cuda" else None
+    dist.init_process_group(backend=backend, timeout=timeout, device_id=bound_device)
     get_logger().debug(f"Initialized torch distributed in {format_time(time.perf_counter() - t0)}")
 
 
@@ -277,7 +286,7 @@ class Tensors(defaultdict):
         for key in keys:
             # All-gather tensors across steps and ranks (get global distribution)
             values = self.pop(key, [])
-            tensors = torch.cat(values, dim=0).to("cuda") if values else torch.empty(0, device="cuda")
+            tensors = torch.cat(values, dim=0).to(DEVICE_TYPE) if values else torch.empty(0, device=DEVICE_TYPE)
             assert tensors.ndim == 1, "Can only aggregate 1D tensors"
             tensors = flexible_all_gather(tensors)
             assert tensors.ndim == 1, "Can only aggregate 1D tensors"
@@ -342,7 +351,7 @@ MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
 class MemoryProfiler:
     def __init__(self, step_num: int, snapshot_path: Path):
-        torch.cuda.memory._record_memory_history(max_entries=MEMORY_SNAPSHOT_MAX_ENTRIES)
+        device_module.memory._record_memory_history(max_entries=MEMORY_SNAPSHOT_MAX_ENTRIES)
         self.logger = get_logger()
         snapshot_path.mkdir(parents=True, exist_ok=True)
         self.snapshot_path = snapshot_path
@@ -355,7 +364,7 @@ class MemoryProfiler:
         step_folder.mkdir(parents=True, exist_ok=True)
         file_path = step_folder / f"rank_{get_world().rank}.pickle"
         with open(file_path, "wb") as output:
-            pickle.dump(torch.cuda.memory._snapshot(), output)
+            pickle.dump(device_module.memory._snapshot(), output)
         self.logger.info(
             f"Finished dumping memory snapshot in {time.monotonic() - begin:.2f} seconds, load {file_path} at https://docs.pytorch.org/memory_viz to visualize the memory usage"
         )

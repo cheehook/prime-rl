@@ -66,6 +66,7 @@ from prime_rl.trainer.moe_runtime import configure_moe_runtime
 from prime_rl.trainer.parallel_dims import ParallelDims
 from prime_rl.trainer.utils import get_dcp_group
 from prime_rl.trainer.world import get_world, wait_for_master
+from prime_rl.utils.device import DEVICE_TYPE
 from prime_rl.utils.logger import get_logger
 from prime_rl.utils.utils import format_time
 from prime_rl.utils.vlm import get_language_model, get_vision_encoder, is_vlm_architecture
@@ -642,7 +643,7 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
 
 
 def load_dcp_from_hf(model: nn.Module, config: ModelConfig):
-    device = "cuda"
+    device = DEVICE_TYPE
     model.to_empty(device=device)
     torch.distributed.barrier()
 
@@ -864,6 +865,11 @@ def resolve_auto_attn(config: ModelConfig) -> None:
     """
     if config.attn != "auto":
         return
+    if DEVICE_TYPE == "xpu":
+        # FA3 and FA4 are Hopper/Blackwell kernels; Intel XPU runs FlashAttention-2.
+        get_logger().info("Auto-resolved attn='auto' to 'flash_attention_2' (Intel XPU)")
+        config.attn = "flash_attention_2"
+        return
     major, minor = torch.cuda.get_device_capability()
     if major in (10, 11):
         resolved = "flash_attention_4"
@@ -948,7 +954,7 @@ def setup_model(
         logger.warning(
             "Skipping loading weights. Initializing an empty model on device, loading from checkpoint later."
         )
-        device = "cuda"
+        device = DEVICE_TYPE
         model.to_empty(device=device)
         torch.distributed.barrier()
         model.init_buffers_post_meta()

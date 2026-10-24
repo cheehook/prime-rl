@@ -6,6 +6,7 @@ import torch
 import torch.distributed as dist
 
 from prime_rl.control.types import Action, ActionNotFoundError, ActionType, ControlConflictError, InvalidActionError
+from prime_rl.utils.device import DEVICE_TYPE
 from prime_rl.utils.logger import get_logger
 
 
@@ -84,6 +85,6 @@ class Controller:
 
 def broadcast_pause(controller: Controller, step: int) -> bool:
     """Whether the master's controller pauses at ``step``, applied by every rank."""
-    paused = torch.tensor(controller.update(step), device="cuda")
+    paused = torch.tensor(controller.update(step), device=DEVICE_TYPE)
     dist.broadcast(paused, src=0)
     return bool(paused.item())

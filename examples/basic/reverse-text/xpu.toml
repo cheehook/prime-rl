@@ -1,0 +1,13 @@
+# Intel XPU (e.g. Arc Pro B70) overlay for the reverse-text RL example:
+#   rl @ examples/basic/reverse-text/rl.toml @ examples/basic/reverse-text/xpu.toml
+# Like the base example it uses two GPUs: inference on the first, the trainer on the second.
+# Run it in the prime-rl:xpu image (Dockerfile.xpu) started with
+#   --device /dev/dri -v /dev/dri/by-path:/dev/dri/by-path --ipc=host
+# The by-path mount lets oneCCL exchange GPU memory handles inside a container.
+
+# NCCL weight broadcast is CUDA-only; move weights through the filesystem.
+[weight_broadcast]
+type = "filesystem"
+
+[trainer.model]
+attn = "flash_attention_2"  # what attn = "auto" resolves to on XPU
