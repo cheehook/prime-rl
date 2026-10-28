@@ -20,6 +20,7 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 
 from prime_rl.control.controller import Controller
 from prime_rl.trainer.world import get_world
+from prime_rl.utils.device import DEVICE_TYPE, DIST_BACKEND, device_module
 from prime_rl.utils.logger import format_time, get_logger
 from prime_rl.utils.pathing import get_ckpt_dir
 
@@ -109,7 +110,7 @@ def clip_grad_norm_(
         grad_norm = torch.linalg.vector_norm(torch.stack(norms)) if norms else torch.tensor(0.0)
         for parameters in mesh_parameters.values():
             torch.nn.utils.clip_grads_with_norm_(parameters, max_norm, grad_norm)
-    return grad_norm.cuda() if grad_norm.device.type == "cpu" else grad_norm
+    return grad_norm.to(DEVICE_TYPE) if grad_norm.device.type == "cpu" else grad_norm
 
 
 def get_ckpt_disk_metrics(output_dir: Path) -> dict[str, float]:
@@ -140,9 +141,13 @@ def bind_process_to_gpu_numa_node() -> None:
     GPU hangs off. Must run before CPU optimizer state allocation and before the
     OMP thread pool spins up.
     """
+    logger = get_logger()
+    if DEVICE_TYPE == "xpu":
+        logger.warning("GPU NUMA lookup uses NVML, which has no Intel XPU equivalent; skipping NUMA binding")
+        return
+
     import pynvml
 
-    logger = get_logger()
     device_id = torch.cuda.current_device()
     pynvml.nvmlInit()
     try:
@@ -188,13 +193,13 @@ def setup_torch_distributed(timeout: timedelta = DEFAULT_TIMEOUT, enable_gloo: b
     get_logger().info(f"Initializing torch distributed (timeout={int(timeout.total_seconds())}s)")
     t0 = time.perf_counter()
     device_id = get_world().local_rank
-    torch.cuda.set_device(device_id)
+    device_module.set_device(device_id)
     # Use Gloo backend for CPU and NCCL for GPU when CPU offloading is enabled
     # Otherwise use NCCL for better GPU performance
     backend = None  # by default nccl
     if enable_gloo:
-        get_logger().info("Using Gloo backend for CPU and NCCL backend for GPU")
-        backend = "cpu:gloo,cuda:nccl"
+        get_logger().info(f"Using Gloo backend for CPU and {DIST_BACKEND} backend for GPU")
+        backend = f"cpu:gloo,{DEVICE_TYPE}:{DIST_BACKEND}"
 
     # init_process_group applies `timeout` only to the default PG; device-mesh
     # sub-groups (dp/cp/ep) are created via new_group without a timeout and fall
@@ -203,7 +208,11 @@ def setup_torch_distributed(timeout: timedelta = DEFAULT_TIMEOUT, enable_gloo: b
     # module default so every subsequently created PG inherits it.
     dist.distributed_c10d.default_pg_timeout = timeout
 
-    dist.init_process_group(backend=backend, timeout=timeout, device_id=device_id)
+    # Binding the default group to a device makes every later new_group look up a backend for that
+    # device. Gloo handles CUDA tensors but not XPU ones, so CPU-only gloo groups (e.g. the DCP group)
+    # fail on XPU when the default group is bound; bind on CUDA only.
+    bound_device = torch.device(DEVICE_TYPE, device_id) if DEVICE_TYPE == "cuda" else None
+    dist.init_process_group(backend=backend, timeout=timeout, device_id=bound_device)
     get_logger().debug(f"Initialized torch distributed in {format_time(time.perf_counter() - t0)}")
 
 
@@ -218,7 +227,7 @@ def get_dcp_group() -> dist.ProcessGroup:
 
 def broadcast_pause(controller: Controller, step: int) -> bool:
     """Whether the master's controller pauses at ``step``, applied by every rank."""
-    paused = torch.tensor(controller.update(step), device="cuda")
+    paused = torch.tensor(controller.update(step), device=DEVICE_TYPE)
     dist.broadcast(paused, src=0)
     return bool(paused.item())
 
@@ -232,6 +241,11 @@ def print_sample(input_ids: list[int], loss_mask: list[bool], tokenizer: PreTrai
     for token, mask in zip(tokenizer.convert_ids_to_tokens(input_ids), loss_mask):
         text.append(token.replace("Ġ", " ").replace("Ċ", "\n"), style="cyan" if mask else "white")
     rich_print(text)
+
+
+# Log2 bins over token staleness: bucketizing by the edges (``right=True``) gives each token's bin
+STALENESS_BIN_EDGES = [1, 2, 4, 8, 16, 32, 64]
+STALENESS_BINS = ["0", "1", "2-3", "4-7", "8-15", "16-31", "32-63", "64+"]
 
 
 class TensorStats:
@@ -253,13 +267,15 @@ class TensorStats:
         mask: Tensor | None = None,
         env_ids: Tensor | None = None,
         env_names: list[str] | None = None,
+        fold_all: bool = True,
     ) -> None:
         """Fold ``values`` (where ``mask`` is set) into ``key``. With ``env_ids`` (each value's index into
-        ``env_names``), fold them into ``{key}/{env}`` per env and into ``{key}/all`` instead.
+        ``env_names``), fold them into ``{key}/{env}`` per env and, with ``fold_all``, into ``{key}/all``
+        instead.
 
         Uses masked reductions instead of boolean indexing, so it never waits for the GPU."""
         # A custom loss may emit a metric on the CPU
-        values = values.detach().reshape(-1).to(device="cuda", dtype=torch.float64)
+        values = values.detach().reshape(-1).to(device=DEVICE_TYPE, dtype=torch.float64)
         if values.numel() == 0:
             return
         mask = torch.ones_like(values, dtype=torch.bool) if mask is None else mask.reshape(-1).to(values.device)
@@ -271,7 +287,8 @@ class TensorStats:
         rows = _moments(values, members)
         for env_name, row in zip(env_names, rows):
             self._fold(f"{key}/{env_name}", row)
-        self._fold(f"{key}/all", torch.cat([rows[:, :3].sum(0), rows[:, 3:].amax(0)]))
+        if fold_all:
+            self._fold(f"{key}/all", torch.cat([rows[:, :3].sum(0), rows[:, 3:].amax(0)]))
 
     def _fold(self, key: str, row: Tensor) -> None:
         if (moments := self.moments.get(key)) is None:
@@ -288,7 +305,7 @@ class TensorStats:
         if not keys:
             return {}
 
-        empty = torch.tensor([0, 0, 0, -math.inf, -math.inf], dtype=torch.float64, device="cuda")
+        empty = torch.tensor([0, 0, 0, -math.inf, -math.inf], dtype=torch.float64, device=DEVICE_TYPE)
         rows = torch.stack([self.moments.get(key, empty) for key in keys])
         sums, extremes = rows[:, :3].contiguous(), rows[:, 3:].contiguous()
         dist.all_reduce(sums, op=dist.ReduceOp.SUM)
@@ -337,6 +354,7 @@ def filter_rl_trainer_tensor_stats_for_wandb(metrics: dict[str, float | int]) ->
     mean_max_only_prefixes = (
         "is_masked/",
         "mismatch_kl/",
+        "mismatch_kl_by_staleness/",
         "masked_mismatch_kl/",
         "unmasked_mismatch_kl/",
         "ref_kl/is_masked/",
@@ -367,7 +385,7 @@ MEMORY_SNAPSHOT_MAX_ENTRIES = 100000
 
 class MemoryProfiler:
     def __init__(self, step_num: int, snapshot_path: Path):
-        torch.cuda.memory._record_memory_history(max_entries=MEMORY_SNAPSHOT_MAX_ENTRIES)
+        device_module.memory._record_memory_history(max_entries=MEMORY_SNAPSHOT_MAX_ENTRIES)
         self.logger = get_logger()
         snapshot_path.mkdir(parents=True, exist_ok=True)
         self.snapshot_path = snapshot_path
@@ -380,7 +398,7 @@ class MemoryProfiler:
         step_folder.mkdir(parents=True, exist_ok=True)
         file_path = step_folder / f"rank_{get_world().rank}.pickle"
         with open(file_path, "wb") as output:
-            pickle.dump(torch.cuda.memory._snapshot(), output)
+            pickle.dump(device_module.memory._snapshot(), output)
         self.logger.info(
             f"Finished dumping memory snapshot in {time.monotonic() - begin:.2f} seconds, load {file_path} at https://docs.pytorch.org/memory_viz to visualize the memory usage"
         )
