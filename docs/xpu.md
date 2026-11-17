@@ -28,16 +28,21 @@ Start a container with the host GPUs:
 
 ```bash
 docker run --rm -it --device /dev/dri -v /dev/dri/by-path:/dev/dri/by-path --ipc=host \
-  -v ~/.cache/huggingface:/root/.cache/huggingface prime-rl:xpu
+  -v ~/.cache/huggingface:/root/.cache/huggingface \
+  -v "$PWD/outputs:/app/outputs" prime-rl:xpu
 ```
 
 The `/dev/dri/by-path` mount lets oneCCL exchange GPU memory handles inside the container. Multi-GPU training needs it.
 
-The image sets `UV_NO_SYNC=1`, so `uv run` keeps the XPU stack instead of syncing the CUDA lock. Commands from the rest of the docs work unchanged inside the container.
+The image sets `UV_NO_SYNC=1`, so `uv run` keeps the XPU stack instead of syncing the CUDA lock. Do not run `uv sync` inside the container: an explicit sync uses the CUDA lock instead.
+
+Local commands need the XPU-specific adjustments below. The bundled SLURM templates explicitly run `uv sync` and use CUDA-specific GPU masks, so they need XPU-specific changes before use.
 
 ## Running
 
-Use the filesystem weight broadcast. The default NCCL broadcast is CUDA-only:
+Use the filesystem weight broadcast. The default NCCL broadcast is CUDA-only.
+
+The examples enable Prime monitoring, and the RL example also enables W&B. Authenticate inside the container with `prime login` and, for RL, `wandb login`, or disable the monitors: use `--no-monitors.prime` for SFT and `--no-monitors.prime --no-monitors.wandb` for every RL command below, including the validation run.
 
 ```bash
 uv run rl @ examples/basic/reverse-text/rl.toml --weight-broadcast.type filesystem
@@ -71,7 +76,7 @@ Tile selectors such as `0.0` reach the trainer unchanged. vLLM accepts device in
 | Attention | `attn = "auto"` picks FA4, FA3 or FA2 | `attn = "auto"` picks `flash_attention_2` |
 | FlashAttention-2 | `flash_attn` package | `kernels-community/flash-attn2` from the Kernel Hub, downloaded into the Hugging Face cache on first use |
 | Full optimizer offload | binds each rank to its GPU's NUMA node | skips NUMA binding with a warning |
-| Trainer allocator | expandable segments on | expandable segments off (oneCCL collectives need it off) |
+| Trainer allocator | expandable segments on | local launches disable expandable segments; for multi-node SLURM, set `PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:False"` in `[trainer.env_vars]` (RL) or `[env_vars]` (SFT) |
 
 CUDA-only kernel packages are not installed in the image: FlashAttention 3 and 4, DeepEP, DeepGEMM, FlashMLA, mamba-ssm, TileLang, quack, sonic-moe, NIXL and Mooncake. Features built on them are unavailable on XPU.
 
@@ -82,7 +87,7 @@ Covered on XPU: vLLM inference on one GPU or with tensor parallelism, the orches
 Example configs are sized for 80 GB cards. On 24 to 32 GB cards:
 
 - Cap the context vLLM reserves KV cache for. `Qwen3-4B-Instruct-2507` advertises a 262k context; `--inference.vllm.max-model-len 8192` is enough for the alphabet-sort example.
-- Lower `seq_len` for SFT. The reverse-text SFT example fits 24 GB at `--seq-len 2048`.
+- Lower `seq_len` for SFT. The reverse-text SFT example fits 24 GB at `--data.seq-len 2048`.
 - vLLM claims 90% of its GPU by default and refuses to start when another process already holds memory there. Check that the inference GPU is idle before launching.
 
 ## Validating an install
