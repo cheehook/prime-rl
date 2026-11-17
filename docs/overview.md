@@ -42,4 +42,5 @@ The `rl` entrypoint reads `examples/basic/reverse-text/rl.toml`, splits it into 
 - **[Scaling](scaling.md)** — Single-GPU through multi-node clusters via FSDP / EP / CP and SLURM.
 - **[Algorithms](algorithms.md)** — Async semantics, loss / advantage / filter plugins, trajectory merging.
 - **[Advanced](advanced.md)** — Custom modeling, multimodal, LoRA, P/D inference.
+- **[Intel GPUs](xpu.md)** - XPU image, differences from CUDA, validating an install.
 - **[Development](development.md)** — Test suite, pre-commit hooks, adding a new model.

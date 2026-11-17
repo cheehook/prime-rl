@@ -13,6 +13,7 @@
                 "algorithms",
                 "ipo",
                 "advanced",
+                "xpu",
                 "development"
             ]
         }

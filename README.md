@@ -67,7 +67,7 @@ The trainer runs the PrimeRL model implementations under `src/prime_rl/trainer/m
 
 Currently, you **need at least one NVIDIA GPU to use prime-rl**. If you don't already have access to one, we recommend our [compute platform](https://app.primeintellect.ai) for everything from renting on-demand single GPUs for developing, debugging and small ablations, to [reserving 1000+ GPU clusters](https://app.primeintellect.ai/dashboard/quotes) for production-scale training.
 
-> *NOTE*: Intel GPUs (XPU) run prime-rl from [`Dockerfile.xpu`](Dockerfile.xpu), whose header has the build and `docker run` commands. Until XCCL weight broadcast is supported, pass `--weight-broadcast.type filesystem` to `rl` and `sft`, or uncomment the `[weight_broadcast]` block in the reverse-text example configs.
+> *NOTE*: Intel GPUs (XPU) run prime-rl from [`Dockerfile.xpu`](Dockerfile.xpu). See [Intel GPUs](docs/xpu.md) for the build and run commands, the differences from CUDA and how to validate an install.
 
 ### Quick Setup
 
@@ -200,6 +200,7 @@ Check out the [docs](docs) directory for in-depth guides on how to use prime-rl.
 - [**Scaling**](docs/scaling.md) - Single-GPU through multi-node, FSDP/EP/CP, SLURM, benchmarking
 - [**Algorithms**](docs/algorithms.md) - Async training and staleness, the AIPO loss, advantage and filter plugins, trajectory merging
 - [**Advanced**](docs/advanced.md) - Custom modeling, multimodal training, LoRA
+- [**Intel GPUs**](docs/xpu.md) - XPU image, differences from CUDA, validating an install
 - [**Development**](docs/development.md) - Test suite, pre-commit hooks, adding a new model
 
 ## Contributing
