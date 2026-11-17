@@ -89,19 +89,13 @@ Example configs are sized for 80 GB cards. On 24 to 32 GB cards:
 
 Run these inside the container, cheapest first.
 
-1. Device selection and the launcher's GPU masks. These fake the torch build, so they also run in CPU CI:
-
-    ```bash
-    uv run pytest tests/unit/utils/test_device.py -v
-    ```
-
-2. Optimizer offload on the GPU:
+1. Optimizer offload on the GPU:
 
     ```bash
     uv run pytest tests/unit/train/test_state_offload.py tests/unit/train/test_cpu_adam.py -v
     ```
 
-3. The reverse-text RL example end to end (inference, orchestrator, trainer). Eval reward should climb from about 0.1 to above 0.8 over the 20 steps:
+2. The reverse-text RL example end to end (inference, orchestrator, trainer). Eval reward should climb from about 0.1 to above 0.8 over the 20 steps:
 
     ```bash
     uv run rl @ examples/basic/reverse-text/rl.toml --weight-broadcast.type filesystem --no-monitors.prime
