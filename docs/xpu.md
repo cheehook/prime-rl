@@ -40,9 +40,9 @@ Local commands need the XPU-specific adjustments below. The bundled SLURM templa
 
 ## Running
 
-Use the filesystem weight broadcast. The default NCCL broadcast is CUDA-only.
+The RL and SFT examples below, and the validation RL run, each require two visible GPUs: one for inference and one for the trainer. Use the filesystem weight broadcast; the default NCCL broadcast is CUDA-only.
 
-The examples enable Prime monitoring, and the RL example also enables W&B. Authenticate inside the container with `prime login` and, for RL, `wandb login`, or disable the monitors: use `--no-monitors.prime` for SFT and `--no-monitors.prime --no-monitors.wandb` for every RL command below, including the validation run.
+The examples enable Prime monitoring, and the RL example also enables W&B. Prime monitoring requires `prime login` and a team enabled for external runs, selected with `prime switch`; for RL, also run `wandb login` for W&B. Otherwise disable the monitors: use `--no-monitors.prime` for SFT and `--no-monitors.prime --no-monitors.wandb` for every RL command below, including the validation run.
 
 ```bash
 uv run rl @ examples/basic/reverse-text/rl.toml --weight-broadcast.type filesystem
